@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>La víbora (Nokia) — HTML</title>
+  <style>
+    :root{--bg:#0b1220;--panel:#0f1724;--accent:#39d353;--muted:#9aa4b2}
+    body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial;background:linear-gradient(180deg,#041021,#071428);color:#e6eef6;display:flex;align-items:center;justify-content:center;height:100vh}
+    .wrap{display:grid;grid-template-columns:640px 260px;gap:18px;align-items:start}
+    .card{background:rgba(255,255,255,0.03);padding:16px;border-radius:12px;box-shadow:0 6px 20px rgba(2,6,23,0.6)}
+    canvas{background:linear-gradient(180deg,#071427,#062233);display:block;border-radius:8px}
+    h1{margin:0 0 8px 0;font-size:18px}
+    .info{font-size:14px;color:var(--muted);margin-bottom:10px}
+    .score{font-weight:700;font-size:20px;color:var(--accent)}
+    .controls{display:flex;gap:8px;margin-top:8px}
+    button{background:transparent;border:1px solid rgba(255,255,255,0.08);padding:8px 10px;border-radius:8px;color:inherit;cursor:pointer}
+    .small{font-size:13px}
+    .fruit-legend{display:flex;flex-direction:column;gap:8px;margin-top:8px}
+    .legend-item{display:flex;align-items:center;gap:10px}
+    .mobile-controls{display:none;margin-top:12px;gap:8px}
+    .mobile-controls button{width:48px;height:48px;border-radius:8px}
+    @media (max-width:900px){
+      .wrap{grid-template-columns:1fr;}
+      .mobile-controls{display:flex}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>La víbora — versión HTML</h1>
+      <div class="info">Usa flechas o WASD para mover. Come frutas: 🍎 manzana, 🍌 banana, 🍐 pera. Las frutas dan diferentes puntajes.</div>
+      <canvas id="game" width="600" height="600"></canvas>
+      <div class="mobile-controls" id="mobileControls">
+        <div style="display:flex;gap:8px;justify-content:center;width:100%">
+          <button id="up">↑</button>
+        </div>
+        <div style="display:flex;gap:8px;justify-content:center;width:100%">
+          <button id="left">←</button>
+          <button id="down">↓</button>
+          <button id="right">→</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div>
+          <div class="small">PUNTOS</div>
+          <div class="score" id="score">0</div>
+        </div>
+        <div>
+          <div class="small">MEJOR</div>
+          <div class="small" id="best">0</div>
+        </div>
+      </div>
+
+      <div class="controls">
+        <button id="startBtn">Iniciar</button>
+        <button id="pauseBtn">Pausar</button>
+        <button id="resetBtn">Reiniciar</button>
+      </div>
+
+      <div class="fruit-legend">
+        <div class="legend-item">🍎 Manzana — 10 pts</div>
+        <div class="legend-item">🍌 Banana — 15 pts</div>
+        <div class="legend-item">🍐 Pera — 20 pts</div>
+      </div>
+
+      <div style="margin-top:12px;color:var(--muted);font-size:13px">Velocidad aumenta cada 3 frutas comidas. No chocar con muro o contigo mismo.</div>
+    </div>
+  </div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const cols = 30; // grid columns
+  const rows = 30; // grid rows
+  const cell = canvas.width / cols; // size
+
+  let snake = [];
+  let dir = {x:1,y:0};
+  let nextDir = {x:1,y:0};
+  let food = null;
+  let score = 0;
+  let best = Number(localStorage.getItem('snake_best')||0);
+  let interval = 140; // ms per tick
+  let tickHandle = null;
+  let running = false;
+  let pendingGrow = 0;
+  let fruitsEaten = 0;
+
+  const scoreEl = document.getElementById('score');
+  const bestEl = document.getElementById('best');
+  bestEl.textContent = best;
+
+  const FRUITS = [
+    {emoji:'🍎', points:10, weight:60},
+    {emoji:'🍌', points:15, weight:30},
+    {emoji:'🍐', points:20, weight:10}
+  ];
+
+  function weightedRandom(arr){
+    const sum = arr.reduce((s,i)=>s+i.weight,0);
+    let r = Math.random()*sum;
+    for(const i of arr){ if(r < i.weight) return i; r -= i.weight }
+    return arr[0];
+  }
+
+  function reset(){
+    snake = [];
+    const startX = Math.floor(cols/2);
+    const startY = Math.floor(rows/2);
+    for(let i=0;i<5;i++) snake.push({x:startX-i,y:startY});
+    dir = {x:1,y:0}; nextDir = {x:1,y:0};
+    score = 0; pendingGrow = 0; fruitsEaten = 0; interval = 140;
+    spawnFood();
+    updateScore();
+  }
+
+  function spawnFood(){
+    let x,y,ok=false;
+    while(!ok){
+      x = Math.floor(Math.random()*cols);
+      y = Math.floor(Math.random()*rows);
+      ok = !snake.some(s=>s.x===x && s.y===y);
+    }
+    const kind = weightedRandom(FRUITS);
+    food = {x,y,kind};
+  }
+
+  function updateScore(){
+    scoreEl.textContent = score;
+    if(score>best){ best=score; bestEl.textContent = best; localStorage.setItem('snake_best',best); }
+  }
+
+  function gameTick(){
+    dir = nextDir;
+    const head = {x:snake[0].x + dir.x, y:snake[0].y + dir.y};
+    // walls collision
+    if(head.x < 0 || head.x >= cols || head.y <0 || head.y >= rows){
+      stop('Has chocado con la pared. Fin del juego.');
+      return;
+    }
+    // self collision
+    if(snake.some(s=>s.x===head.x && s.y===head.y)){
+      stop('Te comiste a ti mismo. Fin del juego.');
+      return;
+    }
+    snake.unshift(head);
+    // food
+    if(food && head.x===food.x && head.y===food.y){
+      score += food.kind.points; fruitsEaten += 1; pendingGrow += 1; spawnFood(); updateScore();
+      // increase speed every 3 fruits
+      if(fruitsEaten % 3 === 0 && interval>50){ interval = Math.max(50, interval - 12); restartTicker(); }
+    }
+    if(pendingGrow>0){ pendingGrow--; } else { snake.pop(); }
+    render();
+  }
+
+  function render(){
+    // clear
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    // grid optional
+    // draw snake
+    for(let i=snake.length-1;i>=0;i--){
+      const s = snake[i];
+      const px = s.x*cell, py = s.y*cell;
+      ctx.fillStyle = i===0 ? '#39d353' : 'rgba(57,211,83,0.7)';
+      ctx.fillRect(px+1,py+1,cell-2,cell-2);
+    }
+    // draw food as emoji centered
+    if(food){
+      ctx.font = (cell-2) + 'px serif';
+      ctx.textAlign = 'center'; ctx.textBaseline='middle';
+      const cx = food.x*cell + cell/2; const cy = food.y*cell + cell/2;
+      ctx.fillText(food.kind.emoji, cx, cy+1);
+    }
+    // score tiny
+    ctx.font = '12px sans-serif'; ctx.fillStyle='rgba(255,255,255,0.06)';
+    ctx.fillText('Grid: ' + cols + 'x' + rows, 50, canvas.height - 8);
+  }
+
+  function start(){ if(running) return; running=true; restartTicker(); }
+  function restartTicker(){ if(tickHandle) clearInterval(tickHandle); tickHandle = setInterval(gameTick, interval); }
+  function pause(){ if(!running) return; running=false; if(tickHandle) clearInterval(tickHandle); }
+  function stop(msg){ pause(); alert(msg + '\nTu puntaje: ' + score); }
+
+  // input
+  window.addEventListener('keydown', e => {
+    const k = e.key;
+    if(k === 'ArrowUp' || k === 'w' || k === 'W') trySetDir(0,-1);
+    if(k === 'ArrowDown' || k === 's' || k === 'S') trySetDir(0,1);
+    if(k === 'ArrowLeft' || k === 'a' || k === 'A') trySetDir(-1,0);
+    if(k === 'ArrowRight' || k === 'd' || k === 'D') trySetDir(1,0);
+    if(k === ' '){ // space = pause
+      running ? pause() : start();
+    }
+  });
+
+  function trySetDir(x,y){
+    // prevent reversing
+    if(x === -dir.x && y === -dir.y) return;
+    nextDir = {x,y};
+  }
+
+  // UI buttons
+  document.getElementById('startBtn').addEventListener('click', ()=>start());
+  document.getElementById('pauseBtn').addEventListener('click', ()=>pause());
+  document.getElementById('resetBtn').addEventListener('click', ()=>{ pause(); reset(); render(); });
+
+  // mobile controls
+  ['up','down','left','right'].forEach(id=>{
+    const el = document.getElementById(id);
+    if(!el) return;
+    el.addEventListener('touchstart', e=>{ e.preventDefault(); if(id==='up') trySetDir(0,-1); if(id==='down') trySetDir(0,1); if(id==='left') trySetDir(-1,0); if(id==='right') trySetDir(1,0); });
+  });
+
+  // prevent swipe scroll on mobile canvas
+  canvas.addEventListener('touchstart', e=>e.preventDefault());
+
+  // initialize and render first frame
+  reset(); render();
+
+})();
+</script>
+</body>
+</html>
